@@ -1,0 +1,59 @@
+stages:
+  - dvc
+  - test
+  - docker
+
+# Bước dvc
+dvc_repro:
+  stage: dvc
+  image: python:3.12.7-slim  # Sử dụng chung Python image cho tất cả các bước
+  before_script:
+    - pip install dvc[all]  # Cài đặt DVC
+    - apt-get update && apt-get install -y awscli  # Cài AWS CLI
+  script:
+    - aws s3 ls  # Kiểm tra quyền truy cập S3 (tùy chọn)
+    - dvc pull  # Tải dữ liệu từ remote storage
+    - dvc repro  # Train lại mô hình
+    - dvc push  # Đẩy kết quả mới lên remote storage
+  only:
+    - main
+  artifacts:
+    paths:
+      - models/  # Lưu thư mục models làm artifacts
+      - data/  # Nếu cần dữ liệu khác, hãy thêm thư mục này
+    expire_in: 1 hour
+
+# Bước kiểm thử
+test:
+  stage: test
+  image: python:3.12.7-slim  # Sử dụng chung Python image cho tất cả các bước
+  before_script:
+    - pip install -r requirements.txt  # Cài đặt các phụ thuộc
+  script:
+    - pytest tests/  # Chạy tất cả các unit test trong thư mục tests
+  only:
+    - main
+  artifacts:
+    paths:
+      - tests/reports  # Lưu báo cáo kiểm thử (nếu có)
+    expire_in: 1 hour
+
+# Bước docker
+build_docker:
+  stage: docker
+  image: docker:latest  # Docker image cho DinD
+  services:
+    - name: docker:latest
+      alias: docker
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY  # Đăng nhập vào Docker Registry của GitLab
+    - docker build -t $CI_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME .  # Xây dựng Docker image với tên image từ biến môi trường
+    - docker push $CI_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME  # Đẩy Docker image lên GitLab Container Registry
+  only:
+    - main
+  needs:
+    - dvc_repro
+    - test
+  dependencies:
+    - dvc_repro
+    - test
